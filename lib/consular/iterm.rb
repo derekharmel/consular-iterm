@@ -13,7 +13,7 @@ module Consular
 
     class << self
 
-      # Checks to see if the current system is darwin and 
+      # Checks to see if the current system is darwin and
       # if $TERM_PROGRAM is iTerm.app
       #
       # @api public
@@ -117,32 +117,24 @@ module Consular
     # @api public
     def execute_window(content, options = {})
       window_options = content[:options]
-      _contents      = content[:tabs]
-      _first_run     = true
+      first_run = true
 
-      _contents.keys.sort.each do |key|
-        _content = _contents[key]
-        _options = content[:options]
-        _name    = options[:name]
-
+      content[:tabs].each do |key,tab|
         _tab =
-        if _first_run && !options[:default]
-          open_window options.merge(window_options)
-        else
-          key == 'default' ? active_tab : open_tab(_options) && active_tab
-        end
+          if first_run && !options[:default]
+            open_window options.merge(window_options)
+          else
+            open_tab(content[:options]) unless key == 'default'
+            active_tab
+          end
 
-        _first_run = false
-        commands = prepend_befores _content[:commands], content[:before]
-        commands = set_title _name, commands
+        first_run = false
 
-        if content.key? :panes
-          commands.each { |cmd| execute_command cmd, :in => _tab }
-          execute_panes content
-          content.delete :panes
-        else
-          commands.each { |cmd| execute_command cmd, :in => _tab }
-        end
+        commands = prepend_befores tab[:commands], content[:before]
+        commands = set_title options[:name], commands
+        commands.each { |cmd| execute_command cmd, :in => _tab }
+
+        execute_panes(tab) if tab.key? :panes
       end
     end
 
@@ -153,55 +145,35 @@ module Consular
     #
     # @api public
     def execute_panes(content)
-      panes    = content[:panes]
-      commands = content[:tabs][:commands]
-      top_level_pane_split panes, commands
-    end
+      panes, commands = content.values_at :panes, :commands
 
-    # Execute commands in the context of a top level pane
-    #
-    # @param [Hash] panes
-    #   Pane contexts.
-    # @param [Array] commands
-    #   Current context tab commands.
-    #
-    # @api public
-    def top_level_pane_split(panes, commands)
-      first_pane      = true
-
-      panes.keys.sort.each do |pane_key|
-        pane_content  = panes[pane_key]
-        pane_commands = pane_content[:commands]
-
-        vertical_split if first_pane
-        execute_pane_commands(pane_commands,commands)
-
-        if pane_content.key?(:panes)
-          select_pane('Left') if first_pane
-          execute_subpanes pane_content[:panes], commands
-          pane_content.delete :panes
-        end
-
-        first_pane = false if first_pane
+      panes.each do |pane|
+        execute_and_split_pane pane, commands, :no_split => (pane == panes.first)
       end
 
+      panes.reverse.each_with_index do |pane,i|
+        (pane[:panes] ||= [])
+          .each{ |pane| execute_and_split_pane pane, commands }
+          .length.times{ previous_pane }
+
+        previous_pane unless pane == panes.first
+      end
     end
 
-    # Execute commands in the context of sub panes
+    # Execute commands in the context of the pane and splits it by default
+    # unless specified not to.
     #
-    # @param [Array] subpanes
+    # @param [Array] pane
     #   Sub panes for the top level pane
-    # @param [Array] tabcommands
+    # @param [Array] tabc_ommands
     #   Tab commands
+    # @param [Hash] options
+    #   Options
     #
     # @api public
-    def execute_subpanes(subpanes, tab_commands)
-      subpanes.keys.sort.each do |subpane_key|
-        subpane_commands = subpanes[subpane_key][:commands]
-        horizontal_split
-        execute_pane_commands(subpane_commands, tab_commands)
-        select_pane 'Right'
-      end
+    def execute_and_split_pane(pane, tab_commands, options={})
+      split pane[:split_direction] unless options[:no_split]
+      execute_pane_commands pane[:commands], tab_commands
     end
 
     # Execute the commands within a pane
@@ -212,28 +184,24 @@ module Consular
     #   Commands for the designated tabs.
     #
     # @api public
-    def execute_pane_commands(pane_commands, tab_commands)
-      pane_commands = (tab_commands || []) + (pane_commands || [])
-      pane_commands.each { |cmd| execute_command cmd }
+    def execute_pane_commands(pane_commands=[], tab_commands=[])
+      (tab_commands + pane_commands).each { |cmd| execute_command cmd }
     end
 
-    # Split the active tab with vertical panes
+    # Split the active tab in the specified manner, defaults to vertical
+    #
+    # @param [Symbol] direction
+    #   Direction to split the pane, should be :vertical or :horizontal
     #
     # @api public
-    def vertical_split
-      call_ui_action "Shell", nil, "Split Vertically with Current Profile"
-    end
-
-    # Split the active tab with horizontal panes
-    #
-    # @api public
-    def horizontal_split
-      call_ui_action "Shell", nil, "Split Horizontally with Current Profile"
+    def split(direction)
+      direction ||= :vertical
+      call_ui_action "Shell", nil, "Split #{direction.to_sym}ly with Current Profile"
     end
 
     # to select panes; iTerm's Appscript select method does not work
     # as expected, we have to select via menu instead
-    # 
+    #
     # @param [String] direction
     #   Direction to split the pane. The valid directions are:
     #   'Above', 'Below', 'Left', 'Right'
@@ -248,6 +216,12 @@ module Consular
       end
     end
 
+    # Moves focuse back to the previous pane.
+    #
+    # @api public
+    def previous_pane
+      call_ui_action "Window", "Select Split Pane", "Previous Pane"
+    end
 
     # Opens a new tab and focuses on it.
     #
